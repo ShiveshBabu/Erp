@@ -1,0 +1,51 @@
+{
+  "name": "svp-erp-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sri Velan Pasumai ERP — production backend (Fastify + PostgreSQL + Prisma)",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "seed": "tsx prisma/seed.ts",
+    "migrate:import": "tsx src/migration/importLegacyBackup.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^9.4.0",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/csrf": "^8.1.0",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/session": "^10.9.0",
+    "@prisma/client": "^5.20.0",
+    "argon2": "^0.41.1",
+    "connect-pg-simple": "^10.0.0",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.1",
+    "pg": "^8.23.0",
+    "pino-pretty": "^11.2.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/connect-pg-simple": "^7.0.3",
+    "@types/node": "^22.7.4",
+    "@types/pg": "^8.11.10",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
