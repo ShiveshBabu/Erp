@@ -1,0 +1,614 @@
+// Sri Velan Pasumai ERP — production database schema
+// PostgreSQL + Prisma. Mirrors the frozen business rules from the
+// architecture-migration-plan.md document. Money is always Decimal —
+// never Float — per instruction.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String           @id @default(cuid())
+  code        String           @unique // SUPER_ADMIN, ADMIN, MANAGER, BILLING_STAFF, INVENTORY_STAFF, SALES_STAFF
+  label       String
+  permissions RolePermission[]
+  users       User[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id    String           @id @default(cuid())
+  code  String           @unique // e.g. 'invoice.create', 'inventory.adjust'
+  label String
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  username       String    @unique
+  phone          String?
+  passwordHash   String
+  roleId         String
+  role           Role      @relation(fields: [roleId], references: [id])
+  status         UserStatus @default(ACTIVE)
+  createdAt      DateTime  @default(now())
+  createdById    String?
+  createdBy      User?     @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers   User[]    @relation("UserCreatedBy")
+  lastLoginAt    DateTime?
+  failedLoginCount Int     @default(0)
+  lockedUntil    DateTime?
+
+  invoicesCreated     Invoice[]        @relation("InvoiceCreatedBy")
+  invoicesCancelled   Invoice[]        @relation("InvoiceCancelledBy")
+  paymentsRecorded    Payment[]        @relation("PaymentCreatedBy")
+  auditLogs           AuditLog[]
+  managedWarehouses   Warehouse[]      @relation("WarehouseManager")
+  passwordResetTokens PasswordResetToken[]
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Customers / Suppliers
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id          String   @id @default(cuid())
+  name        String
+  subArea     String?
+  owner       String?
+  type        String
+  gstin       String?
+  phone       String?
+  email       String?
+  address     String?
+  creditLimit Decimal  @default(0) @db.Decimal(14, 2)
+  since       DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  invoices Invoice[]
+
+  @@map("customers")
+}
+
+model Supplier {
+  id            String   @id @default(cuid())
+  name          String
+  contact       String?
+  phone         String?
+  email         String?
+  gstin         String?
+  address       String?
+  paymentTerms  String?  @default("Net 30")
+  createdAt     DateTime @default(now())
+
+  purchaseBills PurchaseBill[]
+  batches       Batch[]
+
+  @@map("suppliers")
+}
+
+// ---------------------------------------------------------------------------
+// Products / catalog
+// ---------------------------------------------------------------------------
+
+model ProductCategory {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model Unit {
+  id           String        @id @default(cuid())
+  code         String        @unique // 'bag', 'pack', 'btl', 'pc', 'kg'
+  products     Product[]
+  invoiceItems InvoiceItem[]
+  bomItems     BomItem[]
+
+  @@map("units")
+}
+
+enum ProductType {
+  MANUFACTURED
+  TRADED
+  RAW
+}
+
+model Product {
+  id              String           @id @default(cuid())
+  sku             String           @unique
+  name            String
+  categoryId      String
+  category        ProductCategory  @relation(fields: [categoryId], references: [id])
+  hsn             String?
+  unitId          String
+  unit            Unit             @relation(fields: [unitId], references: [id])
+  purchasePrice   Decimal          @db.Decimal(14, 2)
+  sellingPrice    Decimal?         @db.Decimal(14, 2)
+  gstRate         Decimal          @db.Decimal(5, 2)
+  reorderLevel    Decimal          @default(0) @db.Decimal(14, 3)
+  expiryTracking  Boolean          @default(false)
+  type            ProductType      @default(TRADED)
+  createdAt       DateTime         @default(now())
+
+  batches           Batch[]
+  invoiceItems      InvoiceItem[]
+  purchaseBillItems PurchaseBillItem[]
+  bomAsOutput       Bom[]              @relation("BomOutputProduct")
+  bomAsMaterial     BomItem[]
+  productionOrders  ProductionOrder[]
+  productionMaterial ProductionMaterial[]
+
+  @@check(purchasePrice >= 0, map: "product_purchase_price_nonneg")
+  @@check(gstRate >= 0 && gstRate <= 100, map: "product_gst_rate_valid")
+  @@check(reorderLevel >= 0, map: "product_reorder_nonneg")
+  @@map("products")
+}
+
+// ---------------------------------------------------------------------------
+// Warehouses / stock
+// ---------------------------------------------------------------------------
+
+enum WarehouseStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Warehouse {
+  id         String          @id @default(cuid())
+  name       String
+  code       String          @unique
+  address    String?
+  managerId  String?
+  manager    User?           @relation("WarehouseManager", fields: [managerId], references: [id])
+  status     WarehouseStatus @default(ACTIVE)
+  createdAt  DateTime        @default(now())
+
+  batches         Batch[]
+  stockMovements  StockMovement[]
+  invoiceItems    InvoiceItem[]
+  productionOrders ProductionOrder[]
+  expenses        Expense[]
+
+  @@map("warehouses")
+}
+
+model Batch {
+  id            String    @id @default(cuid())
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id])
+  batchNo       String
+  warehouseId   String
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  qty           Decimal   @db.Decimal(14, 3)
+  mfgDate       DateTime?
+  expiryDate    DateTime?
+  purchaseRate  Decimal   @db.Decimal(14, 2)
+  supplierId    String?
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+  createdAt     DateTime  @default(now())
+
+  stockMovements    StockMovement[]
+  invoiceItems      InvoiceItem[]
+  productionOutputs ProductionOutput[]
+
+  @@unique([productId, warehouseId, batchNo], name: "uniq_batch_per_warehouse")
+  @@check(qty >= 0, map: "batch_qty_nonneg")
+  @@check(purchaseRate >= 0, map: "batch_rate_nonneg")
+  @@index([productId, warehouseId])
+  @@map("batches")
+}
+
+enum StockMovementType {
+  OPENING_STOCK
+  PURCHASE
+  SALE
+  SALES_RETURN
+  PURCHASE_RETURN
+  PRODUCTION
+  PRODUCTION_CONSUMPTION
+  STOCK_ADJUSTMENT
+  DAMAGE
+  EXPIRED
+  TRANSFER_IN
+  TRANSFER_OUT
+  INVOICE_CANCELLATION_REVERSAL
+}
+
+model StockMovement {
+  id          String            @id @default(cuid())
+  productId   String
+  product     Product           @relation(fields: [productId], references: [id])
+  batchId     String?
+  batch       Batch?            @relation(fields: [batchId], references: [id])
+  warehouseId String
+  warehouse   Warehouse         @relation(fields: [warehouseId], references: [id])
+  type        StockMovementType
+  qty         Decimal           @db.Decimal(14, 3) // signed: negative for outgoing movements
+  date        DateTime          @default(now())
+  referenceId String? // invoice number / PO number / transfer id, human-readable
+  note        String?
+
+  @@index([productId, warehouseId, date])
+  @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Invoices / payments / returns
+// ---------------------------------------------------------------------------
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  CREDIT_DUE // balance < 0: a real credit owed back to the customer (e.g. return after full payment)
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  number         String        @unique
+  customerId     String
+  customer       Customer      @relation(fields: [customerId], references: [id])
+  date           DateTime      @default(now())
+  dueDate        DateTime
+  subtotal       Decimal       @db.Decimal(14, 2)
+  tax            Decimal       @db.Decimal(14, 2)
+  grandTotal     Decimal       @db.Decimal(14, 2)
+  paid           Decimal       @default(0) @db.Decimal(14, 2)
+  balance        Decimal       @db.Decimal(14, 2) // MAY be negative — see CREDIT_DUE
+  status         InvoiceStatus @default(UNPAID)
+  createdById    String?
+  createdBy      User?         @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  cancelledAt    DateTime?
+  cancelledById  String?
+  cancelledBy    User?         @relation("InvoiceCancelledBy", fields: [cancelledById], references: [id])
+  cancelReason   String?
+  createdAt      DateTime      @default(now())
+
+  items         InvoiceItem[]
+  payments      Payment[]
+  salesReturns  SalesReturn[]
+
+  @@check(grandTotal >= 0, map: "invoice_grand_total_nonneg")
+  @@index([customerId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id])
+  batchId      String
+  batch        Batch    @relation(fields: [batchId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse @relation(fields: [warehouseId], references: [id])
+  qty          Decimal  @db.Decimal(14, 3)
+  unitId       String
+  unit         Unit     @relation(fields: [unitId], references: [id])
+  rate         Decimal  @db.Decimal(14, 2)
+  discountPct  Decimal  @default(0) @db.Decimal(5, 2)
+  gstRate      Decimal  @db.Decimal(5, 2)
+  hsn          String?
+
+  salesReturnItems SalesReturnItem[]
+
+  @@check(qty >= 0, map: "invoice_item_qty_nonneg")
+  @@check(rate >= 0, map: "invoice_item_rate_nonneg")
+  @@check(discountPct >= 0 && discountPct <= 100, map: "invoice_item_discount_valid")
+  @@map("invoice_items")
+}
+
+model Payment {
+  id           String    @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice   @relation(fields: [invoiceId], references: [id])
+  date         DateTime  @default(now())
+  amount       Decimal   @db.Decimal(14, 2)
+  method       String
+  reference    String?
+  reversed     Boolean   @default(false)
+  reversedAt   DateTime?
+  createdById  String?
+  createdBy    User?     @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+
+  @@check(amount > 0, map: "payment_amount_positive")
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+model SalesReturn {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  date        DateTime @default(now())
+  reason      String?
+  creditValue Decimal  @db.Decimal(14, 2)
+
+  items SalesReturnItem[]
+
+  @@map("sales_returns")
+}
+
+model SalesReturnItem {
+  id            String      @id @default(cuid())
+  salesReturnId String
+  salesReturn   SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+  invoiceItemId String
+  invoiceItem   InvoiceItem @relation(fields: [invoiceItemId], references: [id])
+  qty           Decimal     @db.Decimal(14, 3)
+
+  @@check(qty > 0, map: "sales_return_item_qty_positive")
+  @@map("sales_return_items")
+}
+
+// ---------------------------------------------------------------------------
+// Purchases
+// ---------------------------------------------------------------------------
+
+enum PurchaseBillStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+}
+
+model PurchaseBill {
+  id         String             @id @default(cuid())
+  number     String             @unique
+  supplierId String
+  supplier   Supplier           @relation(fields: [supplierId], references: [id])
+  date       DateTime           @default(now())
+  amount     Decimal            @db.Decimal(14, 2)
+  paid       Decimal            @default(0) @db.Decimal(14, 2)
+  balance    Decimal            @db.Decimal(14, 2)
+  status     PurchaseBillStatus @default(UNPAID)
+  createdAt  DateTime           @default(now())
+
+  items    PurchaseBillItem[]
+  payments SupplierPayment[]
+
+  @@check(amount >= 0, map: "purchase_bill_amount_nonneg")
+  @@index([supplierId])
+  @@map("purchase_bills")
+}
+
+model PurchaseBillItem {
+  id             String       @id @default(cuid())
+  purchaseBillId String
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  qty            Decimal      @db.Decimal(14, 3)
+  rate           Decimal      @db.Decimal(14, 2)
+  amount         Decimal      @db.Decimal(14, 2)
+
+  @@check(qty > 0, map: "purchase_bill_item_qty_positive")
+  @@check(rate >= 0, map: "purchase_bill_item_rate_nonneg")
+  @@map("purchase_bill_items")
+}
+
+model SupplierPayment {
+  id             String       @id @default(cuid())
+  purchaseBillId String
+  purchaseBill   PurchaseBill @relation(fields: [purchaseBillId], references: [id])
+  date           DateTime     @default(now())
+  amount         Decimal      @db.Decimal(14, 2)
+  method         String
+  reference      String?
+
+  @@check(amount > 0, map: "supplier_payment_amount_positive")
+  @@map("supplier_payments")
+}
+
+// ---------------------------------------------------------------------------
+// Manufacturing
+// ---------------------------------------------------------------------------
+
+enum BomStatus {
+  ACTIVE
+  DRAFT
+}
+
+model Bom {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  outputProductId  String
+  outputProduct    Product   @relation("BomOutputProduct", fields: [outputProductId], references: [id])
+  batchSize        Decimal   @db.Decimal(14, 3)
+  status           BomStatus @default(ACTIVE)
+  createdAt        DateTime  @default(now())
+
+  items            BomItem[]
+  productionOrders ProductionOrder[]
+
+  @@check(batchSize > 0, map: "bom_batch_size_positive")
+  @@map("boms")
+}
+
+model BomItem {
+  id                 String  @id @default(cuid())
+  bomId              String
+  bom                Bom     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  materialProductId  String
+  materialProduct    Product @relation(fields: [materialProductId], references: [id])
+  qty                Decimal @db.Decimal(14, 3)
+  unitId             String
+  unit               Unit    @relation(fields: [unitId], references: [id])
+
+  @@unique([bomId, materialProductId], name: "uniq_material_per_bom")
+  @@check(qty > 0, map: "bom_item_qty_positive")
+  @@map("bom_items")
+}
+
+enum ProductionStatus {
+  DRAFT
+  PLANNED
+  IN_PRODUCTION
+  COMPLETED
+  CANCELLED
+}
+
+model ProductionOrder {
+  id            String           @id @default(cuid())
+  number        String           @unique
+  bomId         String
+  bom           Bom              @relation(fields: [bomId], references: [id])
+  productId     String
+  product       Product          @relation(fields: [productId], references: [id])
+  plannedQty    Decimal          @db.Decimal(14, 3)
+  warehouseId   String
+  warehouse     Warehouse        @relation(fields: [warehouseId], references: [id])
+  batchNo       String?
+  status        ProductionStatus @default(PLANNED)
+  date          DateTime         @default(now())
+  completedAt   DateTime?
+  actualCost    Decimal?         @db.Decimal(14, 2)
+  cancelledAt   DateTime?
+  cancelReason  String?
+
+  materials ProductionMaterial[]
+  outputs   ProductionOutput[]
+
+  @@check(plannedQty > 0, map: "production_order_qty_positive")
+  @@map("production_orders")
+}
+
+model ProductionMaterial {
+  id                  String          @id @default(cuid())
+  productionOrderId   String
+  productionOrder     ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  materialProductId   String
+  materialProduct     Product         @relation(fields: [materialProductId], references: [id])
+  requiredQty         Decimal         @db.Decimal(14, 3)
+  consumedQty         Decimal         @default(0) @db.Decimal(14, 3)
+
+  @@map("production_materials")
+}
+
+model ProductionOutput {
+  id                String          @id @default(cuid())
+  productionOrderId String
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  batchId           String
+  batch             Batch           @relation(fields: [batchId], references: [id])
+  qty               Decimal         @db.Decimal(14, 3)
+
+  @@map("production_outputs")
+}
+
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  tokenHash  String    @unique // never the raw token — see authService.ts
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Expenses / Audit / Settings / Sequences
+// ---------------------------------------------------------------------------
+
+model Expense {
+  id          String    @id @default(cuid())
+  number      String    @unique
+  date        DateTime  @default(now())
+  category    String
+  description String
+  amount      Decimal   @db.Decimal(14, 2)
+  method      String
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  employee    String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  @@check(amount > 0, map: "expense_amount_positive")
+  @@map("expenses")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id])
+  roleLabel    String?
+  action       String
+  module       String?
+  entity       String?
+  entityId     String?
+  oldValue     Json?
+  newValue     Json?
+  reason       String?
+  sessionInfo  String?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
+
+model CompanySetting {
+  key   String @id
+  value Json
+
+  @@map("company_settings")
+}
+
+model GstSetting {
+  id             String   @id @default(cuid())
+  hsn            String
+  description    String
+  rate           Decimal  @db.Decimal(5, 2)
+  effectiveFrom  DateTime @default(now())
+
+  @@map("gst_settings")
+}
+
+// Race-safe numbering: UPDATE ... RETURNING next_value in a transaction.
+model Sequence {
+  name      String @id
+  nextValue BigInt @default(1)
+
+  @@map("sequences")
+}
