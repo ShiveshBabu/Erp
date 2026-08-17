@@ -1,0 +1,80 @@
+export type ErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'UNAUTHENTICATED'
+  | 'PERMISSION_DENIED'
+  | 'CSRF_PROTECTION_FAILED'
+  | 'NOT_FOUND'
+  | 'DUPLICATE_SKU'
+  | 'DUPLICATE_INVOICE_NUMBER'
+  | 'DUPLICATE_BATCH'
+  | 'DUPLICATE_MATERIAL_IN_BOM'
+  | 'INSUFFICIENT_STOCK'
+  | 'BATCH_EXPIRED'
+  | 'NO_VALID_BATCH'
+  | 'PAYMENT_EXCEEDS_BALANCE'
+  | 'INVALID_PAYMENT_AMOUNT'
+  | 'INVOICE_CANCELLED'
+  | 'INVOICE_HAS_PAYMENTS'
+  | 'PAYMENT_ALREADY_REVERSED'
+  | 'LAST_SUPER_ADMIN_PROTECTED'
+  | 'INVALID_CREDENTIALS'
+  | 'ACCOUNT_DISABLED'
+  | 'ACCOUNT_LOCKED'
+  | 'INVALID_RESET_TOKEN'
+  | 'RESET_TOKEN_EXPIRED'
+  | 'RESET_TOKEN_ALREADY_USED'
+  | 'WEAK_PASSWORD'
+  | 'RATE_LIMITED'
+  | 'INSUFFICIENT_PRODUCTION_MATERIAL'
+  | 'INTERNAL_ERROR';
+
+export class AppError extends Error {
+  code: ErrorCode;
+  statusCode: number;
+  details?: Record<string, unknown>;
+
+  constructor(code: ErrorCode, message: string, statusCode = 400, details?: Record<string, unknown>) {
+    super(message);
+    this.code = code;
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+
+  toJSON() {
+    return {
+      success: false,
+      error: { code: this.code, message: this.message, ...(this.details ? { details: this.details } : {}) }
+    };
+  }
+}
+
+export const STATUS_BY_CODE: Partial<Record<ErrorCode, number>> = {
+  VALIDATION_ERROR: 400,
+  UNAUTHENTICATED: 401,
+  PERMISSION_DENIED: 403,
+  CSRF_PROTECTION_FAILED: 403,
+  NOT_FOUND: 404,
+  DUPLICATE_SKU: 409,
+  DUPLICATE_INVOICE_NUMBER: 409,
+  DUPLICATE_BATCH: 409,
+  DUPLICATE_MATERIAL_IN_BOM: 409,
+  INSUFFICIENT_STOCK: 409,
+  BATCH_EXPIRED: 409,
+  NO_VALID_BATCH: 409,
+  PAYMENT_EXCEEDS_BALANCE: 409,
+  INVALID_PAYMENT_AMOUNT: 400,
+  INVOICE_CANCELLED: 409,
+  INVOICE_HAS_PAYMENTS: 409,
+  PAYMENT_ALREADY_REVERSED: 409,
+  LAST_SUPER_ADMIN_PROTECTED: 409,
+  INVALID_CREDENTIALS: 401,
+  ACCOUNT_DISABLED: 403,
+  ACCOUNT_LOCKED: 423,
+  INVALID_RESET_TOKEN: 400,
+  RESET_TOKEN_EXPIRED: 400,
+  RESET_TOKEN_ALREADY_USED: 400,
+  WEAK_PASSWORD: 400,
+  RATE_LIMITED: 429,
+  INSUFFICIENT_PRODUCTION_MATERIAL: 409,
+  INTERNAL_ERROR: 500
+};
